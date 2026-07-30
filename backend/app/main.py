@@ -12,16 +12,23 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
+from app.agents.email_agent import run_email_triage
 from app.api.errors import register_exception_handlers
 from app.api.middleware import RequestLoggingMiddleware
 from app.api.v1.router import api_router
 from app.config.logging import configure_logging, get_logger
 from app.config.settings import Settings, get_settings
 from app.infra.db.session import Database
+from app.infra.events import EventBus
+from app.infra.google.rate_limiter import TokenBucketRateLimiter
+from app.infra.queue import AIProcessingJob, AIProcessingQueue
+from app.scheduler import build_scheduler
+from app.workers.ai_processing_worker import AIProcessingWorker
 
 logger = get_logger(__name__)
 
@@ -51,12 +58,44 @@ def _build_lifespan(
             pool_pre_ping=settings.database.pool_pre_ping,
         )
         app.state.db = database
+
+        google_http_client = httpx.AsyncClient()
+        app.state.google_http_client = google_http_client
+        app.state.gmail_rate_limiter = TokenBucketRateLimiter(
+            rate_per_second=settings.gmail.requests_per_second,
+            burst_capacity=settings.gmail.burst_capacity,
+        )
+
+        async def ai_processor(job: AIProcessingJob) -> None:
+            await run_email_triage(job, database, settings)
+
+        app.state.event_bus = EventBus()
+        app.state.ai_processing_queue = AIProcessingQueue()
+        ai_worker = AIProcessingWorker(
+            app.state.ai_processing_queue, processor=ai_processor
+        )
+        ai_worker.start()
+        app.state.ai_processing_worker = ai_worker
+
+        if not settings.ai.is_configured:
+            logger.warning("ai_agent_not_configured")
+
         if not settings.oauth.is_configured:
             logger.warning("oauth_not_configured")
+
+        scheduler = build_scheduler(
+            database=database, settings=settings, google_http_client=google_http_client
+        )
+        scheduler.start()
+        app.state.scheduler = scheduler
+
         logger.info("application_started")
         try:
             yield
         finally:
+            scheduler.shutdown(wait=False)
+            await ai_worker.stop()
+            await google_http_client.aclose()
             await database.dispose()
             logger.info("application_stopped")
 

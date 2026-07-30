@@ -1,0 +1,70 @@
+# Local development stack: PostgreSQL, migration runner, and the API.
+#
+# Usage (from repo root):
+#   docker compose -f infra/docker-compose.yml up --build
+#
+# The API waits for a healthy database, runs migrations once via the `migrate`
+# service, and then serves on http://localhost:8000.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-aeea}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-aeea}
+      POSTGRES_DB: ${DB_NAME:-aeea}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-aeea} -d ${DB_NAME:-aeea}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - ../backend/.env.example
+    environment:
+      DB_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command:
+      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    env_file:
+      - ../backend/.env.example
+    environment:
+      DB_HOST: db
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live').status==200 else 1)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
