@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infra.db.base import Base
@@ -46,6 +46,8 @@ class Email(
         ),
         Index("ix_emails_user_id_received_at", "user_id", "received_at"),
         Index("ix_emails_user_id_gmail_thread_id", "user_id", "gmail_thread_id"),
+        Index("ix_emails_user_id_category", "user_id", "category"),
+        Index("ix_emails_user_id_priority_score", "user_id", "priority_score"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -63,6 +65,27 @@ class Email(
     received_at: Mapped[datetime] = mapped_column(nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Denormalized cache of the triage graph's latest verdict (see
+    # ``app/agents/graph.py``'s ``categorize``/``priority_score``/
+    # ``deadline_detection`` nodes and ``app/agents/email_agent.py``, which
+    # writes these back after each run) -- the full audit trail lives in
+    # ``AIHistory.extra_metadata``; these columns exist so dashboard reads
+    # can filter/sort in SQL instead of parsing JSON per row.
+    category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    priority_score: Mapped[float | None] = mapped_column(nullable=True)
+    has_deadline: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deadline_at: Mapped[datetime | None] = mapped_column(nullable=True)
+
+    # -- Embedding (semantic search) -----------------------------------------
+    # A plain JSON float array, mirroring ``Memory.embedding`` -- see that
+    # model's docstring for why this isn't a ``pgvector`` column. Populated
+    # asynchronously by the scheduled ``backfill_email_embeddings`` job (see
+    # ``app/scheduler.py``), not at ingestion time, so Phase 4's ingestion
+    # pipeline stays untouched; ``app/services/email_search.py`` treats a
+    # null embedding as "no semantic score yet" rather than an error.
+    embedding: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     attachments: Mapped[list[Attachment]] = relationship(
         back_populates="email", cascade="all, delete-orphan"

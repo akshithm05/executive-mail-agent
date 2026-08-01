@@ -106,3 +106,52 @@ async def test_worker_gives_up_after_max_attempts_and_continues_processing() -> 
         assert "good" in calls
     finally:
         await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_calls_on_failure_after_exhausting_retries() -> None:
+    queue = AIProcessingQueue()
+    failures: list[tuple[str, str]] = []
+
+    async def always_fails(_job: AIProcessingJob) -> None:
+        raise RuntimeError("permanent")
+
+    async def on_failure(job: AIProcessingJob, error: BaseException) -> None:
+        failures.append((job.gmail_message_id, str(error)))
+
+    worker = AIProcessingWorker(
+        queue, processor=always_fails, max_attempts=2, on_failure=on_failure
+    )
+    worker.start()
+    try:
+        await queue.enqueue(_job(gmail_message_id="doomed"))
+        await asyncio.wait_for(queue.join(), timeout=2)
+        assert failures == [("doomed", "permanent")]
+    finally:
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_worker_survives_a_failing_on_failure_callback() -> None:
+    """A broken failure-handler must not crash the worker loop either."""
+    queue = AIProcessingQueue()
+    calls: list[str] = []
+
+    async def always_fails(job: AIProcessingJob) -> None:
+        calls.append(job.gmail_message_id)
+        raise RuntimeError("permanent")
+
+    async def broken_on_failure(_job: AIProcessingJob, _error: BaseException) -> None:
+        raise RuntimeError("the failure handler is itself broken")
+
+    worker = AIProcessingWorker(
+        queue, processor=always_fails, max_attempts=1, on_failure=broken_on_failure
+    )
+    worker.start()
+    try:
+        await queue.enqueue(_job(gmail_message_id="first"))
+        await queue.enqueue(_job(gmail_message_id="second"))
+        await asyncio.wait_for(queue.join(), timeout=2)
+        assert calls == ["first", "second"]
+    finally:
+        await worker.stop()

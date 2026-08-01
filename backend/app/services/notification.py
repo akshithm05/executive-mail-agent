@@ -24,3 +24,16 @@ class NotificationService(CRUDService[Notification]):
     async def mark_read(self, notification_id: uuid.UUID) -> Notification | None:
         """Mark a notification as read."""
         return await self._repo.mark_read(notification_id)
+
+    async def list_by_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        unread_only: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Sequence[Notification]:
+        """Return a user's notifications, most recent first."""
+        return await self._repo.list_by_user(
+            user_id, unread_only=unread_only, limit=limit, offset=offset
+        )

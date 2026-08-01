@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same branch/PR so pushes don't queue behind
+# stale ones.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: backend
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check app tests
+      - run: ruff format --check app tests
+
+  typecheck:
+    name: Type check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: mypy app
+
+  test:
+    name: Test (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: pytest
+
+  docker-smoke-test:
+    name: Docker build + live smoke test (real Postgres/Redis)
+    runs-on: ubuntu-latest
+    # Runs independently of the SQLite-backed pytest job above: this is
+    # what actually catches Postgres-dialect-specific bugs (see
+    # app/core/time.py's module docstring for the naive/aware datetime
+    # lesson that motivated adding this job) -- the unit/integration
+    # suite runs entirely against SQLite and would never have caught it.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the stack
+        working-directory: infra
+        run: docker compose up --build -d db redis migrate api
+
+      - name: Wait for the API to report healthy
+        working-directory: infra
+        run: |
+          for _ in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' infra-api-1 2>/dev/null || echo "starting")
+            if [ "$status" = "healthy" ]; then
+              echo "API is healthy"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "API never became healthy" >&2
+          docker compose logs
+          exit 1
+
+      - name: Verify liveness and readiness probes
+        run: |
+          curl -sf http://localhost:8000/api/v1/health/live
+          curl -sf http://localhost:8000/api/v1/health/ready
+
+      - name: Verify Prometheus metrics endpoint
+        run: curl -sf http://localhost:8000/api/v1/metrics | grep -q aeea_job_runs_total
+
+      - name: Dump logs on failure
+        if: failure()
+        working-directory: infra
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        working-directory: infra
+        run: docker compose down -v

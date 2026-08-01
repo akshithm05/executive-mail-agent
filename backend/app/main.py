@@ -15,19 +15,31 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app import __version__
 from app.agents.email_agent import run_email_triage
 from app.api.errors import register_exception_handlers
-from app.api.middleware import RequestLoggingMiddleware
+from app.api.middleware import (
+    CSRFMiddleware,
+    RateLimitMiddleware,
+    RequestLoggingMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.api.v1.router import api_router
 from app.config.logging import configure_logging, get_logger
 from app.config.settings import Settings, get_settings
+from app.infra.cache import build_redis_client
 from app.infra.db.session import Database
 from app.infra.events import EventBus
 from app.infra.google.rate_limiter import TokenBucketRateLimiter
+from app.infra.leader_lock import try_acquire_scheduler_leadership
+from app.infra.metrics import AI_TRIAGE_TOTAL
 from app.infra.queue import AIProcessingJob, AIProcessingQueue
+from app.infra.repositories.failed_job import FailedJobRepository
+from app.observability import init_sentry, init_tracing, instrument_database
 from app.scheduler import build_scheduler
+from app.services.retry_queue import RetryQueueService
 from app.workers.ai_processing_worker import AIProcessingWorker
 
 logger = get_logger(__name__)
@@ -58,6 +70,17 @@ def _build_lifespan(
             pool_pre_ping=settings.database.pool_pre_ping,
         )
         app.state.db = database
+        instrument_database(database.engine, settings)
+
+        redis_client = build_redis_client(settings.redis)
+        app.state.redis = redis_client
+        try:
+            await redis_client.ping()
+        except Exception as exc:
+            # Fail open, not closed: caching and rate limiting both degrade
+            # gracefully without Redis (see app/infra/cache.py's module
+            # docstring) -- this is a loud warning, not a startup failure.
+            logger.warning("redis_unreachable_at_startup", error=str(exc))
 
         google_http_client = httpx.AsyncClient()
         app.state.google_http_client = google_http_client
@@ -69,10 +92,38 @@ def _build_lifespan(
         async def ai_processor(job: AIProcessingJob) -> None:
             await run_email_triage(job, database, settings)
 
+        async def ai_processing_failed(
+            job: AIProcessingJob, error: BaseException
+        ) -> None:
+            """Push a permanently-failed triage job onto the retry queue.
+
+            The AI-processing worker already retried this job in-process
+            (see ``AIProcessingWorker``); this only fires once that has been
+            exhausted, so the failure is still visible and retryable later
+            instead of being silently dropped.
+            """
+            AI_TRIAGE_TOTAL.labels(outcome="failure").inc()
+            async with database.session() as session:
+                retry_queue = RetryQueueService(FailedJobRepository(session))
+                await retry_queue.enqueue_failure(
+                    tenant_id=job.tenant_id,
+                    user_id=job.user_id,
+                    job_type="ai_triage",
+                    payload={
+                        "tenant_id": str(job.tenant_id),
+                        "user_id": str(job.user_id),
+                        "email_id": str(job.email_id),
+                        "gmail_message_id": job.gmail_message_id,
+                    },
+                    error=error,
+                )
+
         app.state.event_bus = EventBus()
         app.state.ai_processing_queue = AIProcessingQueue()
         ai_worker = AIProcessingWorker(
-            app.state.ai_processing_queue, processor=ai_processor
+            app.state.ai_processing_queue,
+            processor=ai_processor,
+            on_failure=ai_processing_failed,
         )
         ai_worker.start()
         app.state.ai_processing_worker = ai_worker
@@ -84,18 +135,28 @@ def _build_lifespan(
             logger.warning("oauth_not_configured")
 
         scheduler = build_scheduler(
-            database=database, settings=settings, google_http_client=google_http_client
+            database=database,
+            settings=settings,
+            google_http_client=google_http_client,
+            event_bus=app.state.event_bus,
+            ai_processing_queue=app.state.ai_processing_queue,
         )
-        scheduler.start()
+        # Only one replica's scheduler should actually fire jobs -- see
+        # app/infra/leader_lock.py's module docstring.
+        is_scheduler_leader = await try_acquire_scheduler_leadership(redis_client)
+        if is_scheduler_leader:
+            scheduler.start()
         app.state.scheduler = scheduler
 
         logger.info("application_started")
         try:
             yield
         finally:
-            scheduler.shutdown(wait=False)
+            if is_scheduler_leader:
+                scheduler.shutdown(wait=False)
             await ai_worker.stop()
             await google_http_client.aclose()
+            await redis_client.aclose()
             await database.dispose()
             logger.info("application_stopped")
 
@@ -114,6 +175,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """
     settings = settings or get_settings()
     configure_logging(level=settings.log_level, fmt=settings.log_format)
+    init_sentry(settings)
 
     app = FastAPI(
         title=settings.app_name,
@@ -125,7 +187,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # Middleware (outermost first): CORS wraps request logging.
+    # Middleware, added innermost-first (each subsequent call wraps the
+    # ones before it, so the last one added is the outermost layer -- see
+    # each middleware's own docstring for why it sits where it does):
+    #   CSRF -> RateLimit -> RequestLogging -> CORS -> GZip -> SecurityHeaders
+    app.add_middleware(CSRFMiddleware, session_cookie_name=settings.session.cookie_name)
+    app.add_middleware(
+        RateLimitMiddleware, session_cookie_name=settings.session.cookie_name
+    )
     app.add_middleware(
         RequestLoggingMiddleware,
         header_name=settings.request_id_header,
@@ -138,10 +207,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
         expose_headers=[settings.request_id_header],
     )
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+    app.add_middleware(SecurityHeadersMiddleware, enable_hsts=settings.is_production)
 
     register_exception_handlers(app)
     app.state.settings = settings
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+    init_tracing(app, settings)
 
     return app
 

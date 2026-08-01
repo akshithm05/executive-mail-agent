@@ -195,6 +195,56 @@ class MemoryUpdateResult(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class SearchQueryParseResult(BaseModel):
+    """Output of parsing a free-text AI-powered search query.
+
+    Splits a natural-language query (e.g. "unread invoices from last month")
+    into the part that maps cleanly to a SQL filter (``category``,
+    ``is_read``, ``days_back``, ``keyword``) and the residual part that
+    only a semantic/embedding comparison can resolve (``semantic_query`` --
+    e.g. "recruiter emails" or "internship offers" have no literal keyword
+    to filter on). See ``app/services/email_search.py`` for how both halves
+    are combined into one ranked result set.
+    """
+
+    semantic_query: str = Field(
+        description=(
+            "The query, or the part of it with no literal filter meaning, "
+            "to embed for semantic similarity ranking. Never empty -- if "
+            "the whole query was consumed by filters, repeat the original "
+            "query text here so ranking still has something to compare "
+            "against."
+        )
+    )
+    category: Category | None = Field(
+        default=None,
+        description="Set only if the query clearly names one of the fixed categories.",
+    )
+    is_read: bool | None = Field(
+        default=None,
+        description="True/false if the query explicitly says read/unread, else null.",
+    )
+    has_deadline: bool | None = Field(default=None)
+    days_back: int | None = Field(
+        default=None,
+        description=(
+            "If the query references a relative time window (e.g. 'last "
+            "month', 'this week', 'yesterday'), the number of days back "
+            "from now to search from. Null if no time constraint is implied."
+        ),
+    )
+    keyword: str | None = Field(
+        default=None,
+        description=(
+            "A literal word or phrase (e.g. a company name like 'Deloitte') "
+            "that must appear verbatim in the email, if the query names one. "
+            "Null if the query is purely conceptual with nothing literal to "
+            "match."
+        ),
+    )
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
 class MemorySummaryResult(BaseModel):
     """Output of the memory-summarization maintenance task.
 

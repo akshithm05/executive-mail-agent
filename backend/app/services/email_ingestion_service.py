@@ -32,6 +32,7 @@ from app.config.logging import get_logger
 from app.infra.events import EmailIngestedEvent, EventBus
 from app.infra.google.gmail_client import GmailClient
 from app.infra.google.html_text import html_to_text
+from app.infra.metrics import EMAILS_INGESTED_TOTAL
 from app.infra.models.attachment import Attachment
 from app.infra.models.email import Email
 from app.infra.models.user import User
@@ -191,6 +192,7 @@ class EmailIngestionService:
 
         await self._publish_and_enqueue(user_id, tenant_id, email_row)
 
+        EMAILS_INGESTED_TOTAL.inc()
         logger.info(
             "email_ingested",
             user_id=str(user_id),

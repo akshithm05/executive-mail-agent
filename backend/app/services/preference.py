@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Any, cast
 
 from app.infra.models.preference import Preference
@@ -20,6 +21,10 @@ class PreferenceService(CRUDService[Preference]):
     async def get_by_key(self, user_id: uuid.UUID, key: str) -> Preference | None:
         """Return a user's preference by key, or ``None`` if unset."""
         return await self._repo.get_by_key(user_id, key)
+
+    async def list_by_user(self, user_id: uuid.UUID) -> Sequence[Preference]:
+        """Return every active preference for a user."""
+        return await self._repo.list_by_user(user_id)
 
     async def set(
         self,

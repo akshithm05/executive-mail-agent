@@ -24,7 +24,12 @@ class LivenessResponse(BaseModel):
 class ReadinessResponse(BaseModel):
     """Response for the readiness probe.
 
-    ``status`` is ``ok`` only when every dependency check is ``up``.
+    ``status`` is ``ok`` only when every *required* dependency check is
+    ``up`` -- today, only the database. Optional infrastructure like Redis
+    still appears in ``checks`` for visibility, but a Redis outage alone
+    never flips ``status`` to ``degraded``: caching and rate limiting both
+    fail open without it (see ``app/infra/cache.py``), so the app can still
+    serve useful traffic.
     """
 
     status: HealthStatus = Field(description="Overall readiness status.")

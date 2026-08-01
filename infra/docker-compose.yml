@@ -1,10 +1,14 @@
-# Local development stack: PostgreSQL, migration runner, and the API.
+# Local development stack: PostgreSQL, Redis, migration runner, the API,
+# and a monitoring stack (Prometheus + Grafana).
 #
 # Usage (from repo root):
 #   docker compose -f infra/docker-compose.yml up --build
 #
 # The API waits for a healthy database, runs migrations once via the `migrate`
-# service, and then serves on http://localhost:8000.
+# service, and then serves on http://localhost:8000. Prometheus scrapes it on
+# http://localhost:9090; Grafana (pre-provisioned with a Prometheus
+# datasource and a starter dashboard) is on http://localhost:3001
+# (admin/admin, change on first login).
 
 services:
   db:
@@ -23,6 +27,17 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   migrate:
     build:
       context: ../backend
@@ -32,6 +47,7 @@ services:
       - ../backend/.env.example
     environment:
       DB_HOST: db
+      REDIS_HOST: redis
     depends_on:
       db:
         condition: service_healthy
@@ -46,10 +62,13 @@ services:
       - ../backend/.env.example
     environment:
       DB_HOST: db
+      REDIS_HOST: redis
     ports:
       - "8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -66,5 +85,32 @@ services:
       retries: 5
       start_period: 10s
 
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   pgdata:
+  prometheus_data:
+  grafana_data:

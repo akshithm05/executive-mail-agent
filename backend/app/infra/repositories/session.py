@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infra.models.session import Session
@@ -32,3 +32,16 @@ class SessionRepository(SQLAlchemyRepository[Session]):
         """Mark a session as revoked, effective immediately."""
         session_row.revoked_at = datetime.now(UTC)
         await self._session.flush()
+
+    async def delete_expired_before(self, cutoff: datetime) -> int:
+        """Hard-delete sessions that expired (or were revoked) before ``cutoff``.
+
+        Used by the scheduled cleanup sweep -- an expired or revoked session
+        is already unusable, so there is no soft-delete/audit value in
+        keeping the row once it is well past that point.
+        """
+        stmt = delete(Session).where(
+            (Session.expires_at < cutoff) | (Session.revoked_at < cutoff)
+        )
+        result = await self._session.execute(stmt)
+        return int(result.rowcount or 0)

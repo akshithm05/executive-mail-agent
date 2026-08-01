@@ -6,7 +6,7 @@ FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
+    PYTHONFAULTHANDLER=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
@@ -22,7 +22,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --prefix=/install -r requirements.txt
+# BuildKit cache mount: pip's download/wheel cache persists across builds
+# (keyed by this stage's cache id) without ending up in any image layer --
+# faster rebuilds when only the app's own source changed, with no size cost.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefix=/install -r requirements.txt
 
 # ---- Runtime ----------------------------------------------------------------
 FROM base AS runtime

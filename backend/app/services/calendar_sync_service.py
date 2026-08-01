@@ -20,13 +20,13 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import UTC, datetime
 
 import httpx
 
 from app.config.logging import get_logger
 from app.config.settings import Settings
 from app.core.crypto import TokenCipher
+from app.core.time import utcnow
 from app.infra.db.session import Database
 from app.infra.google.calendar_client import GoogleCalendarClient
 from app.infra.google.oauth_client import GoogleOAuthClient
@@ -126,7 +126,7 @@ class CalendarSyncService:
         await self._repo.update_fields(
             event.id,
             google_event_id=google_event_id,
-            last_synced_at=datetime.now(UTC),
+            last_synced_at=utcnow(),
             synced_hash=content_hash,
         )
 

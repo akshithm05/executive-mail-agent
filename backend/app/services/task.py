@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
 
+from app.core.time import utcnow
 from app.infra.models.task import Task
 from app.infra.repositories.task import TaskRepository
 from app.services.crud import CRUDService
@@ -28,6 +28,17 @@ class TaskService(CRUDService[Task]):
 
     async def complete(self, task_id: uuid.UUID) -> Task | None:
         """Mark a task completed and stamp its completion time."""
-        return await self.update(
-            task_id, status="completed", completed_at=datetime.now(UTC)
+        return await self.update(task_id, status="completed", completed_at=utcnow())
+
+    async def list_by_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Sequence[Task]:
+        """Return a user's tasks, optionally filtered by status."""
+        return await self._repo.list_by_user(
+            user_id, status=status, limit=limit, offset=offset
         )

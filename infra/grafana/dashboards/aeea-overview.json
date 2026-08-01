@@ -1,0 +1,96 @@
+{
+  "title": "AEEA Backend Overview",
+  "uid": "aeea-overview",
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "HTTP request rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (status_code) (rate(aeea_http_requests_total[5m]))",
+          "legendFormat": "{{status_code}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "HTTP request duration (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, path_template) (rate(aeea_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{path_template}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Scheduled job outcomes",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (job, outcome) (rate(aeea_job_runs_total[15m]))",
+          "legendFormat": "{{job}} ({{outcome}})"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Retry queue / dead-letter queue depth",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "aeea_retry_queue_depth", "legendFormat": "retry queue" },
+        { "expr": "aeea_dead_letter_queue_depth", "legendFormat": "dead-letter queue" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Cache hit rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(rate(aeea_cache_requests_total{outcome=\"hit\"}[5m])) / sum(rate(aeea_cache_requests_total[5m]))",
+          "legendFormat": "hit rate"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Rate-limit rejections",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "rate(aeea_rate_limit_rejections_total[5m])", "legendFormat": "rejections/s" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Health check status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "aeea_health_check_status", "legendFormat": "{{check}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "AI processing queue depth",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        { "expr": "aeea_ai_processing_queue_depth", "legendFormat": "queue depth" }
+      ]
+    }
+  ]
+}

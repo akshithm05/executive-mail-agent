@@ -154,6 +154,44 @@ memory_key null for one-off facts. Most emails reveal nothing worth \
 persisting long-term -- return an empty list rather than inventing weak \
 signal."""
 
+
+def search_query_parse_user_message(query: str, *, today: str) -> str:
+    """Render the user-turn message for search-query parsing.
+
+    ``today`` is an ISO 8601 date string -- the reference point for
+    resolving relative time phrases like "last month" into ``days_back``.
+    """
+    return f'Today\'s date: {today}\n\nSearch query: "{query}"'
+
+
+SEARCH_QUERY_PARSE_SYSTEM = """\
+A user is searching their own email inbox with a natural-language query. \
+Split the query into a structured filter and a semantic remainder:
+
+- category: set only if the query clearly names one of the fixed \
+categories (action_required, meeting_request, fyi, newsletter, personal, \
+spam, other) -- most queries name neither, leave null.
+- is_read: true if the query says "unread"/"read", else null.
+- has_deadline: true if the query explicitly asks about deadlines/due \
+dates, else null.
+- days_back: if the query references a relative time window (e.g. "last \
+month", "this week", "yesterday", "today"), resolve it to a number of days \
+back from today's date (given below) to search from -- e.g. "last month" \
+is roughly 30-60 days depending on the current date, "this week" is 7, \
+"yesterday" is 1-2. Null if no time constraint is implied.
+- keyword: a literal word or phrase that must appear verbatim somewhere in \
+the email -- almost always a proper noun like a company or person's name \
+(e.g. "Deloitte"). Null if the query is purely conceptual (e.g. "recruiter \
+emails", "internship offers") with nothing literal to match against.
+- semantic_query: the query's core meaning, for semantic similarity \
+ranking against each email's content. Strip out only the parts you already \
+captured as structured filters above (e.g. "unread invoices" -> "invoices"; \
+"emails mentioning Deloitte" -> "Deloitte" or the empty concept, since \
+keyword already covers the literal match -- in that case just repeat the \
+company name here too, so ranking still has a useful signal). Never leave \
+this empty -- if everything was captured as a filter, repeat the original \
+query."""
+
 MEMORY_SUMMARIZATION_SYSTEM = """\
 You are given a list of individual memory entries of the same category, \
 accumulated over time about one user. Consolidate them into a single, \

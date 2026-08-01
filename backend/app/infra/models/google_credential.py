@@ -35,6 +35,14 @@ class GoogleCredential(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), nullable=False
     )
     needs_reauth: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # High-water mark for the scheduled Gmail-polling job (see
+    # app/services/email_polling_service.py) -- messages received after this
+    # timestamp are fetched on the next poll. Null means "never polled";
+    # the poller bounds its first search window instead of importing a
+    # mailbox's entire history.
+    last_polled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     def __repr__(self) -> str:
         """Return an unambiguous representation for logs and debugging."""

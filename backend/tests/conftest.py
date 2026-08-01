@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 import app.infra.models
 import pytest
 import pytest_asyncio
-from app.config.settings import AISettings, SessionSettings, Settings
+from app.config.settings import AISettings, RateLimitSettings, SessionSettings, Settings
 from app.infra.db.base import Base
 from app.infra.db.session import Database
 from app.infra.google.rate_limiter import TokenBucketRateLimiter
@@ -34,6 +34,7 @@ from tests.fake_google.app import (
     FakeGoogleState,
     create_fake_google_app,
 )
+from tests.fake_redis import FakeRedis
 
 
 @pytest_asyncio.fixture
@@ -57,6 +58,14 @@ def settings() -> Settings:
     round-trip through httpx's cookie jar in tests, which talk to the ASGI
     app over a plain ``http://`` base URL (the same is true of any local,
     non-TLS deployment -- see ``SESSION_COOKIE_SECURE`` in ``.env.example``).
+
+    Rate limiting is disabled by default -- CSRF is deliberately left
+    enabled (see ``logged_in_client``, which handles it transparently) since
+    that's real, always-on protection every mutating-request test already
+    exercises, but a shared 120-req/window budget across every test in the
+    suite (which don't run in isolated processes) would be an unrelated
+    source of flakiness. Tests that specifically exercise rate limiting
+    build their own ``Settings(rate_limit=RateLimitSettings(enabled=True))``.
     """
     return Settings(
         environment="test",
@@ -64,6 +73,7 @@ def settings() -> Settings:
         log_level="WARNING",
         session=SessionSettings(cookie_secure=False),
         ai=AISettings(anthropic_api_key="test-key"),
+        rate_limit=RateLimitSettings(enabled=False),
     )
 
 
@@ -122,6 +132,13 @@ def app(
     application.state.gmail_rate_limiter = TokenBucketRateLimiter(
         rate_per_second=1000.0, burst_capacity=1000
     )
+    # The real lifespan (app/main.py's _build_lifespan) never runs in tests
+    # -- httpx's ASGITransport doesn't trigger FastAPI startup/shutdown
+    # events -- so every piece of state it would normally set up on
+    # app.state is instead set here directly. Redis is no exception: a
+    # real in-memory fake (see tests/fake_redis.py), not a real server,
+    # keeping the suite hermetic.
+    application.state.redis = FakeRedis()
     return application
 
 
@@ -134,13 +151,21 @@ async def client(app: object) -> AsyncIterator[AsyncClient]:
 
 
 @pytest_asyncio.fixture
-async def logged_in_client(client: AsyncClient) -> AsyncClient:
+async def logged_in_client(client: AsyncClient, settings: Settings) -> AsyncClient:
     """An httpx client that has completed a real Google login round-trip.
 
     Drives the actual ``/auth/google/login`` -> ``/auth/google/callback``
     sequence (which in turn calls the fake Google server), so the resulting
     session cookie is the product of real application code, not injected
     directly into the client's cookie jar.
+
+    Also echoes the double-submit CSRF cookie the callback issues (see
+    ``app/api/v1/routes/auth.py``'s ``_set_csrf_cookie``) back as a default
+    header on every subsequent request from this client -- exactly what a
+    real frontend does (read the JS-readable cookie, send it as a header on
+    mutating requests) -- so every existing test that POSTs/PATCHes/DELETEs
+    through this fixture keeps passing the CSRF check in ``app/api/
+    middleware/csrf.py`` without each test needing to know CSRF exists.
     """
     login_response = await client.get(
         "/api/v1/auth/google/login", follow_redirects=False
@@ -152,4 +177,7 @@ async def logged_in_client(client: AsyncClient) -> AsyncClient:
         params={"code": VALID_AUTH_CODE, "state": state},
     )
     assert callback_response.status_code == 200
+    csrf_token = client.cookies.get(settings.csrf.cookie_name)
+    assert csrf_token is not None
+    client.headers[settings.csrf.header_name] = csrf_token
     return client

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import as_naive_utc
 from app.infra.models.prompt_log import PromptLog
 from app.infra.repositories.base import SoftDeleteRepository
 
@@ -25,3 +27,16 @@ class PromptLogRepository(SoftDeleteRepository[PromptLog]):
         )
         result = await self._session.execute(stmt)
         return result.scalars().all()
+
+    async def delete_older_than(self, cutoff: datetime) -> int:
+        """Hard-delete prompt logs created before ``cutoff``.
+
+        Used by the scheduled cleanup sweep -- prompt/response logs are pure
+        observability data with unbounded growth (one row per LLM call);
+        unlike business data they carry no soft-delete/audit requirement
+        past their retention window. ``cutoff`` is normalized to naive UTC
+        (see ``app/core/time.py``) since ``created_at`` is a naive column.
+        """
+        stmt = delete(PromptLog).where(PromptLog.created_at < as_naive_utc(cutoff))
+        result = await self._session.execute(stmt)
+        return int(result.rowcount or 0)

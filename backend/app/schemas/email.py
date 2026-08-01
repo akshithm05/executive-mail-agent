@@ -54,6 +54,33 @@ class EmailRead(BaseModel):
     received_at: datetime
     is_read: bool
     is_starred: bool
+    category: str | None
+    priority_score: float | None
+    has_deadline: bool
+    deadline_at: datetime | None
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+
+
+class EmailSummaryRead(BaseModel):
+    """Compact email representation for list views (inbox, urgent, deadlines).
+
+    Omits ``body_text``/``body_html`` -- list views never need the full
+    body, and leaving it out keeps these (frequently large) list responses
+    small.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    subject: str
+    snippet: str
+    from_address: str
+    received_at: datetime
+    is_read: bool
+    is_starred: bool
+    category: str | None
+    priority_score: float | None
+    has_deadline: bool
+    deadline_at: datetime | None

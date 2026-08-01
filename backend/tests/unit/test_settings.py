@@ -1,8 +1,31 @@
 """Tests for application settings."""
 
 import pytest
-from app.config.settings import DatabaseSettings, OAuthSettings, Settings
+from app.config.settings import (
+    DatabaseSettings,
+    OAuthSettings,
+    SecuritySettings,
+    SessionSettings,
+    Settings,
+)
 from cryptography.fernet import Fernet
+
+
+def _valid_production_kwargs() -> dict[str, object]:
+    """Return the minimum overrides that make a ``production`` Settings valid.
+
+    Every field here corresponds to one check in ``Settings.
+    _reject_insecure_production_config`` -- see that validator's docstring.
+    """
+    return {
+        "environment": "production",
+        "cors_origins": ["https://app.example.com"],
+        "security": SecuritySettings(
+            token_encryption_key=Fernet.generate_key().decode()
+        ),
+        "session": SessionSettings(cookie_secure=True),
+        "oauth": OAuthSettings(client_id="x", client_secret="y"),
+    }
 
 
 def test_database_async_and_sync_dsn_build_correctly() -> None:
@@ -27,8 +50,37 @@ def test_cors_origins_accept_comma_separated_string() -> None:
 
 
 def test_is_production_flag() -> None:
-    assert Settings(environment="production").is_production is True
+    assert Settings(**_valid_production_kwargs()).is_production is True
     assert Settings(environment="local").is_production is False
+
+
+def test_production_config_with_all_secrets_set_boots_cleanly() -> None:
+    Settings(**_valid_production_kwargs())
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"security": SecuritySettings()},  # public default Fernet key
+        {"session": SessionSettings(cookie_secure=False)},
+        {"cors_origins": ["http://localhost:3000"]},
+        {"cors_origins": ["*"]},
+        {"oauth": OAuthSettings(client_id="", client_secret="")},
+    ],
+)
+def test_production_config_rejects_each_insecure_default(
+    override: dict[str, object],
+) -> None:
+    kwargs = {**_valid_production_kwargs(), **override}
+    with pytest.raises(ValueError, match="insecure production configuration"):
+        Settings(**kwargs)
+
+
+def test_non_production_environments_are_never_checked() -> None:
+    # The same insecure defaults are fine (expected, even) outside production.
+    Settings(environment="local")
+    Settings(environment="test")
+    Settings(environment="staging")
 
 
 def test_list_settings_load_from_real_environment_variables(

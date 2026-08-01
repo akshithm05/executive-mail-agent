@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from typing import Any, cast
 
 from app.agents import prompts
 from app.agents.embeddings import EmbeddingProvider
 from app.agents.memory_scoring import DEFAULT_HALF_LIFE_DAYS, compute_importance_score
 from app.config.logging import get_logger
+from app.core.time import utcnow
 from app.infra.models.memory import Memory
 from app.infra.repositories.memory import MemoryRepository
 from app.services.crud import CRUDService
@@ -85,7 +85,7 @@ class MemoryService(CRUDService[Memory]):
         """
         embedding = embedding_provider.embed(content) if embedding_provider else None
         embedding_model = embedding_provider.model_name if embedding_provider else None
-        now = datetime.now(UTC)
+        now = utcnow()
 
         existing = (
             await self._repo.get_by_key(user_id, memory_type, memory_key)
@@ -147,7 +147,7 @@ class MemoryService(CRUDService[Memory]):
         which is why this recomputes ``importance_score`` too rather than
         just touching the timestamp.
         """
-        now = datetime.now(UTC)
+        now = utcnow()
         for memory in memories:
             memory.access_count += 1
             memory.last_accessed_at = now
@@ -173,7 +173,7 @@ class MemoryService(CRUDService[Memory]):
             The number of memories rescored.
         """
         memories = await self._repo.list_all_active(user_id)
-        now = datetime.now(UTC)
+        now = utcnow()
         for memory in memories:
             new_score = compute_importance_score(
                 memory, now=now, half_life_days=self._half_life_days

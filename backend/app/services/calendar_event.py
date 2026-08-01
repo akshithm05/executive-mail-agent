@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 
 from app.infra.models.calendar_event import CalendarEvent
 from app.infra.repositories.calendar_event import CalendarEventRepository
@@ -23,3 +23,11 @@ class CalendarEventService(CRUDService[CalendarEvent]):
     ) -> Sequence[CalendarEvent]:
         """Return events for a user starting within ``[start, end)``."""
         return await self._repo.list_in_range(user_id, start, end)
+
+    async def list_upcoming(
+        self, user_id: uuid.UUID, *, limit: int = 50
+    ) -> Sequence[CalendarEvent]:
+        """Return a user's upcoming events, soonest first."""
+        return await self._repo.list_upcoming(
+            user_id, now=datetime.now(UTC), limit=limit
+        )

@@ -26,8 +26,10 @@ this and always score 1.0 -- they should never decay out of relevance.
 from __future__ import annotations
 
 import math
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING
+
+from app.core.time import as_naive_utc, utcnow
 
 if TYPE_CHECKING:
     from app.infra.models.memory import Memory
@@ -95,13 +97,15 @@ def compute_importance_score(
     if memory.is_pinned:
         return 1.0
 
-    now = now or datetime.now(UTC)
+    # `Memory.last_accessed_at`/`updated_at` are naive-but-UTC-by-convention
+    # columns (see ``app/core/time.py``); ``now`` is normalized the same way
+    # regardless of whether the caller passed an aware or naive value, so the
+    # subtraction below never raises on a naive/aware mismatch.
+    now = as_naive_utc(now) if now is not None else utcnow()
     # A brand-new, not-yet-flushed row has no `updated_at` yet (it is a
     # server-side default populated on insert) -- treat it as scored "now",
     # i.e. zero elapsed time, rather than crashing on a None anchor.
-    anchor = memory.last_accessed_at or memory.updated_at or now
-    if anchor.tzinfo is None:
-        anchor = anchor.replace(tzinfo=UTC)
+    anchor = as_naive_utc(memory.last_accessed_at or memory.updated_at or now)
     elapsed_days = max((now - anchor).total_seconds() / 86400.0, 0.0)
 
     # Column defaults (e.g. `reinforcement_count`'s default of 1) are applied

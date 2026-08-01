@@ -22,6 +22,7 @@ from starlette.responses import Response
 
 from app.api.middleware.context import set_request_id
 from app.config.logging import get_logger
+from app.infra.metrics import HTTP_REQUEST_DURATION_SECONDS, HTTP_REQUESTS_TOTAL
 
 logger = get_logger(__name__)
 
@@ -61,11 +62,27 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             logger.exception("request_failed", duration_ms=duration_ms)
             raise
 
-        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        duration_s = time.perf_counter() - start
         response.headers[self._header_name] = request_id
         logger.info(
             "request_completed",
             status_code=response.status_code,
-            duration_ms=duration_ms,
+            duration_ms=round(duration_s * 1000, 2),
         )
+
+        # The raw path would blow up metric cardinality (one series per
+        # UUID ever requested) -- use the matched route's template
+        # ("/emails/{email_id}") once routing has resolved it, falling back
+        # to the raw path for anything that never reached a route (404s).
+        route = request.scope.get("route")
+        path_template = getattr(route, "path", request.url.path)
+        HTTP_REQUESTS_TOTAL.labels(
+            method=request.method,
+            path_template=path_template,
+            status_code=str(response.status_code),
+        ).inc()
+        HTTP_REQUEST_DURATION_SECONDS.labels(
+            method=request.method, path_template=path_template
+        ).observe(duration_s)
+
         return response

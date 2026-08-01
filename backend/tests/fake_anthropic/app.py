@@ -90,11 +90,21 @@ _DEFAULT_RESPONSES: dict[str, dict[str, Any]] = {
         "summary": "This sender consistently requires signed contracts by a deadline.",
         "confidence": 0.8,
     },
+    "semantic_query": {
+        "semantic_query": "recruiter emails",
+        "category": None,
+        "is_read": None,
+        "has_deadline": None,
+        "days_back": None,
+        "keyword": None,
+        "confidence": 0.85,
+    },
 }
 
 # Order matters: schemas share some field names (e.g. "confidence" on all of
 # them), so check the most specific/unique field for each node first.
 _NODE_FIELD_ORDER = [
+    "semantic_query",
     "tasks",
     "body_text",
     "should_create_event",

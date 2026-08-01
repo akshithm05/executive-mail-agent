@@ -24,3 +24,25 @@ langgraph==1.0.10
 
 # Phase 8: task/deadline extraction, reminders, Google Calendar sync.
 apscheduler==3.11.3
+
+# Phase 10: scheduled jobs, retry/dead-letter queue, metrics.
+prometheus-client==0.26.0
+
+# Phase 11: multi-channel notification service.
+pywebpush==2.3.0
+google-auth==2.56.2
+aiosmtplib==5.1.2
+
+# Phase 13: analytics dashboard, PDF export.
+reportlab==5.0.0
+
+# Phase 14: productionization -- Redis (cache/rate-limit), error tracking,
+# distributed tracing.
+redis==8.1.0
+sentry-sdk==2.66.1
+opentelemetry-api==1.44.0
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
+opentelemetry-instrumentation-fastapi==0.65b0
+opentelemetry-instrumentation-sqlalchemy==0.65b0
+opentelemetry-instrumentation-httpx==0.65b0

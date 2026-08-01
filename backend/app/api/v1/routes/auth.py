@@ -15,6 +15,8 @@ Implements the full OAuth 2.0 login lifecycle against Google:
 
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
@@ -39,6 +41,28 @@ def _set_session_cookie(response: Response, settings: SettingsDep, token: str) -
         samesite=settings.session.cookie_samesite,
         path="/",
     )
+
+
+def _set_csrf_cookie(response: Response, settings: SettingsDep) -> str:
+    """Issue the double-submit CSRF cookie alongside the session cookie.
+
+    Deliberately *not* ``httponly`` -- the frontend must be able to read
+    this value with JavaScript to echo it back as a header (see
+    ``app/api/middleware/csrf.py``). Returns the token so callers that need
+    it (none today, but keeps the helper testable) don't have to re-read
+    the cookie jar.
+    """
+    token = secrets.token_urlsafe(32)
+    response.set_cookie(
+        settings.csrf.cookie_name,
+        token,
+        max_age=settings.csrf.token_ttl_seconds,
+        httponly=False,
+        secure=settings.session.cookie_secure,
+        samesite=settings.session.cookie_samesite,
+        path="/",
+    )
+    return token
 
 
 def _user_profile(user: User) -> UserProfileResponse:
@@ -119,6 +143,7 @@ async def google_callback(
 
     response.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
     _set_session_cookie(response, settings, session_token)
+    _set_csrf_cookie(response, settings)
     return response
 
 
@@ -169,4 +194,5 @@ async def logout(
     if raw_session_token is not None:
         await auth_service.logout(raw_session_token=raw_session_token, user=user)
     response.delete_cookie(settings.session.cookie_name, path="/")
+    response.delete_cookie(settings.csrf.cookie_name, path="/")
     return LogoutResponse()

@@ -11,8 +11,9 @@ Two distinct probes are exposed, matching container-orchestrator conventions:
 from __future__ import annotations
 
 from fastapi import APIRouter, Response, status
+from redis.exceptions import RedisError
 
-from app.api.deps import DatabaseDep
+from app.api.deps import DatabaseDep, RedisClientDep
 from app.schemas.system import (
     CheckStatus,
     HealthStatus,
@@ -35,15 +36,27 @@ async def live() -> LivenessResponse:
     summary="Readiness probe",
     responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ReadinessResponse}},
 )
-async def ready(database: DatabaseDep, response: Response) -> ReadinessResponse:
-    """Report readiness, checking that the database answers a query.
+async def ready(
+    database: DatabaseDep, redis_client: RedisClientDep, response: Response
+) -> ReadinessResponse:
+    """Report readiness, checking the database and (informationally) Redis.
 
-    Sets HTTP 503 when any dependency is down so orchestrators withhold
-    traffic until the instance recovers.
+    Sets HTTP 503 only when the database is down -- see
+    ``ReadinessResponse``'s docstring for why Redis doesn't gate overall
+    readiness the same way.
     """
     db_up = await database.ping()
     db_status: CheckStatus = "up" if db_up else "down"
+
+    try:
+        redis_up = bool(await redis_client.ping())
+    except RedisError:
+        redis_up = False
+    redis_status: CheckStatus = "up" if redis_up else "down"
+
     overall: HealthStatus = "ok" if db_up else "degraded"
     if overall != "ok":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    return ReadinessResponse(status=overall, checks={"database": db_status})
+    return ReadinessResponse(
+        status=overall, checks={"database": db_status, "redis": redis_status}
+    )

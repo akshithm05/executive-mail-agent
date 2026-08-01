@@ -8,6 +8,8 @@ per job -- cheap, and avoids any state leaking between jobs.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import httpx
 from anthropic import AsyncAnthropic
 
@@ -18,7 +20,9 @@ from app.agents.memory_retrieval import MemoryRetrievalService
 from app.agents.state import EmailTriageState
 from app.config.logging import get_logger
 from app.config.settings import Settings
+from app.core.time import as_naive_utc
 from app.infra.db.session import Database
+from app.infra.metrics import AI_TRIAGE_TOTAL
 from app.infra.models.email import Email
 from app.infra.queue import AIProcessingJob
 from app.infra.repositories.ai_history import AIHistoryRepository
@@ -31,6 +35,7 @@ from app.infra.repositories.prompt_log import PromptLogRepository
 from app.infra.repositories.reminder import ReminderRepository
 from app.infra.repositories.task import TaskRepository
 from app.services.memory import MemoryService
+from app.services.notification_dispatch import build_notification_dispatch_service
 from app.services.reminder import ReminderService
 
 logger = get_logger(__name__)
@@ -58,6 +63,7 @@ async def run_email_triage(
     settings: Settings,
     *,
     http_client: httpx.AsyncClient | None = None,
+    notification_http_client: httpx.AsyncClient | None = None,
 ) -> None:
     """Load the ingested email and run the full triage graph over it.
 
@@ -75,6 +81,14 @@ async def run_email_triage(
         http_client: Test-only injection point for a custom transport (see
             ``tests/integration/test_email_agent.py``); production always
             leaves this ``None`` and gets a real client the SDK manages.
+        notification_http_client: The HTTP client used for outbound
+            notification-channel deliveries (Slack/Discord/Telegram/
+            WhatsApp/webhook/mobile push) triggered by the graph's
+            ``notification`` node. Distinct from ``http_client`` above,
+            which is specifically the Anthropic SDK's own transport --
+            conflating the two would mean a test overriding one silently
+            affects the other. Production always leaves this ``None`` and
+            gets a short-lived client scoped to this triage run.
     """
     async with database.session() as session:
         email_repo = EmailRepository(session)
@@ -98,6 +112,9 @@ async def run_email_triage(
             max_retries=0,
             http_client=http_client,
         )
+        owns_notification_http_client = notification_http_client is None
+        if notification_http_client is None:
+            notification_http_client = httpx.AsyncClient()
         try:
             claude_client = StructuredLLMClient(
                 raw_client, settings.ai, PromptLogRepository(session)
@@ -130,6 +147,9 @@ async def run_email_triage(
                 memory_retrieval=memory_retrieval,
                 embedding_provider=embedding_provider,
                 reminder_service=ReminderService(ReminderRepository(session)),
+                notification_dispatch=build_notification_dispatch_service(
+                    session, settings, notification_http_client
+                ),
             )
             graph = build_graph(deps)
             initial_state = _build_initial_state(job, email)
@@ -144,6 +164,23 @@ async def run_email_triage(
                 task_count=len(final_state.get("created_task_ids", [])),
                 errors=final_state.get("errors", []),
             )
+
+            # Cache the verdict onto the Email row itself (see the module
+            # docstring on migration 0008) so dashboard reads can filter/sort
+            # in SQL instead of parsing every row's AIHistory.extra_metadata.
+            deadline_raw = final_state.get("deadline_at")
+            await email_repo.update_fields(
+                email.id,
+                category=final_state.get("category"),
+                priority_score=final_state.get("priority_score"),
+                has_deadline=bool(final_state.get("has_deadline")),
+                deadline_at=as_naive_utc(datetime.fromisoformat(deadline_raw))
+                if deadline_raw
+                else None,
+            )
+            AI_TRIAGE_TOTAL.labels(outcome="success").inc()
         finally:
             if http_client is None:
                 await raw_client.close()
+            if owns_notification_http_client:
+                await notification_http_client.aclose()

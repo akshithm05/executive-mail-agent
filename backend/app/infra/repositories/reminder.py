@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import as_naive_utc
 from app.infra.models.reminder import Reminder
 from app.infra.repositories.base import SoftDeleteRepository
 
@@ -27,12 +28,14 @@ class ReminderRepository(SoftDeleteRepository[Reminder]):
         dynamically-scheduled job per reminder, so it needs no persistent
         job store and survives a process restart trivially (a reminder that
         was due while the process was down simply fires on the next poll).
+        ``now`` is normalized to naive UTC (see ``app/core/time.py``) --
+        ``remind_at`` is a naive column.
         """
         stmt = (
             select(Reminder)
             .where(
                 Reminder.status == "pending",
-                Reminder.remind_at <= now,
+                Reminder.remind_at <= as_naive_utc(now),
                 Reminder.deleted_at.is_(None),
             )
             .order_by(Reminder.remind_at.asc())

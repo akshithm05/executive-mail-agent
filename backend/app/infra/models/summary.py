@@ -19,7 +19,7 @@ from app.infra.db.mixins import (
 if TYPE_CHECKING:
     from app.infra.models.email import Email
 
-SUMMARY_TYPES = ("email", "thread", "daily_digest")
+SUMMARY_TYPES = ("email", "thread", "daily_digest", "weekly_digest")
 
 
 class Summary(

@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 
+from app.core.time import utcnow
 from app.infra.models.reminder import Reminder
 from app.infra.repositories.reminder import ReminderRepository
 from app.services.crud import CRUDService
@@ -33,7 +34,7 @@ class ReminderService(CRUDService[Reminder]):
 
     async def list_due(self, *, now: datetime | None = None) -> Sequence[Reminder]:
         """Return pending reminders whose ``remind_at`` has passed."""
-        return await self._repo.list_due(now=now or datetime.now(UTC))
+        return await self._repo.list_due(now=now or utcnow())
 
     async def schedule(
         self,
@@ -60,7 +61,7 @@ class ReminderService(CRUDService[Reminder]):
 
     async def mark_sent(self, reminder_id: uuid.UUID) -> Reminder | None:
         """Mark a reminder as dispatched."""
-        return await self.update(reminder_id, status="sent", sent_at=datetime.now(UTC))
+        return await self.update(reminder_id, status="sent", sent_at=utcnow())
 
     async def cancel(self, reminder_id: uuid.UUID) -> Reminder | None:
         """Cancel a pending reminder (e.g. its task was completed early)."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,3 +27,11 @@ class PreferenceRepository(SoftDeleteRepository[Preference]):
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def list_by_user(self, user_id: uuid.UUID) -> Sequence[Preference]:
+        """Return every active preference for a user."""
+        stmt = select(Preference).where(
+            Preference.user_id == user_id, Preference.deleted_at.is_(None)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()

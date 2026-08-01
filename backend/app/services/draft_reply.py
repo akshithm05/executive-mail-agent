@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
 
+from app.core.time import utcnow
 from app.infra.models.draft_reply import DraftReply
 from app.infra.repositories.draft_reply import DraftReplyRepository
 from app.services.crud import CRUDService
@@ -88,7 +88,7 @@ class DraftReplyService(CRUDService[DraftReply]):
             draft_id,
             status="sent",
             gmail_draft_id=gmail_draft_id,
-            sent_at=datetime.now(UTC),
+            sent_at=utcnow(),
         )
 
     async def replace_generated_content(

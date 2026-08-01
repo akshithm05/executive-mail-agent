@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import as_naive_utc
 from app.infra.models.calendar_event import CalendarEvent
 from app.infra.repositories.base import SoftDeleteRepository
 
@@ -22,16 +23,42 @@ class CalendarEventRepository(SoftDeleteRepository[CalendarEvent]):
     async def list_in_range(
         self, user_id: uuid.UUID, start: datetime, end: datetime
     ) -> Sequence[CalendarEvent]:
-        """Return events for a user starting within ``[start, end)``."""
+        """Return events for a user starting within ``[start, end)``.
+
+        ``start``/``end`` are normalized to naive UTC (see
+        ``app/core/time.py``) -- ``start_at`` is a naive column.
+        """
         stmt = (
             select(CalendarEvent)
             .where(
                 CalendarEvent.user_id == user_id,
-                CalendarEvent.start_at >= start,
-                CalendarEvent.start_at < end,
+                CalendarEvent.start_at >= as_naive_utc(start),
+                CalendarEvent.start_at < as_naive_utc(end),
                 CalendarEvent.deleted_at.is_(None),
             )
             .order_by(CalendarEvent.start_at)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalars().all()
+
+    async def list_upcoming(
+        self, user_id: uuid.UUID, *, now: datetime, limit: int = 50
+    ) -> Sequence[CalendarEvent]:
+        """Return a user's upcoming (not cancelled) events, soonest first.
+
+        ``now`` is normalized to naive UTC (see ``app/core/time.py``) --
+        ``start_at`` is a naive column.
+        """
+        stmt = (
+            select(CalendarEvent)
+            .where(
+                CalendarEvent.user_id == user_id,
+                CalendarEvent.deleted_at.is_(None),
+                CalendarEvent.status != "cancelled",
+                CalendarEvent.start_at >= as_naive_utc(now),
+            )
+            .order_by(CalendarEvent.start_at.asc())
+            .limit(limit)
         )
         result = await self._session.execute(stmt)
         return result.scalars().all()

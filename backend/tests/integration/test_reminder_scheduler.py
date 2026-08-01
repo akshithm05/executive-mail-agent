@@ -10,9 +10,13 @@ testing framework machinery it doesn't own.
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
+import pytest_asyncio
+from app.config.settings import Settings
 from app.infra.db.session import Database
 from app.infra.models.calendar_event import CalendarEvent
 from app.infra.models.tenant import Tenant
@@ -26,6 +30,12 @@ from app.infra.repositories.user import UserRepository
 from app.scheduler import dispatch_due_reminders, run_memory_decay_sweep
 from app.services.memory import MemoryService
 from app.services.reminder import ReminderService
+
+
+@pytest_asyncio.fixture
+async def http_client() -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient() as client:
+        yield client
 
 
 async def _seed_user(database: Database) -> tuple[uuid.UUID, uuid.UUID]:
@@ -92,7 +102,9 @@ async def test_cancel_reminder_excludes_it_from_due(database: Database) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_due_reminders_creates_notifications(database: Database) -> None:
+async def test_dispatch_due_reminders_creates_notifications(
+    database: Database, settings: Settings, http_client: httpx.AsyncClient
+) -> None:
     tenant_id, user_id = await _seed_user(database)
     now = datetime.now(UTC)
 
@@ -111,7 +123,9 @@ async def test_dispatch_due_reminders_creates_notifications(database: Database) 
             message="Not due yet",
         )
 
-    dispatched = await dispatch_due_reminders(database)
+    dispatched = await dispatch_due_reminders(
+        database, settings, http_client=http_client
+    )
     assert dispatched == 1
 
     async with database.session() as session:
@@ -126,14 +140,18 @@ async def test_dispatch_due_reminders_creates_notifications(database: Database) 
         assert remaining_due == []
 
     # Running dispatch again must not re-notify an already-sent reminder.
-    assert await dispatch_due_reminders(database) == 0
+    assert (
+        await dispatch_due_reminders(database, settings, http_client=http_client) == 0
+    )
     async with database.session() as session:
         notifications = await NotificationRepository(session).list_unread(user_id)
         assert len(notifications) == 1
 
 
 @pytest.mark.asyncio
-async def test_dispatch_due_reminders_links_calendar_event(database: Database) -> None:
+async def test_dispatch_due_reminders_links_calendar_event(
+    database: Database, settings: Settings, http_client: httpx.AsyncClient
+) -> None:
     tenant_id, user_id = await _seed_user(database)
     now = datetime.now(UTC)
 
@@ -155,7 +173,9 @@ async def test_dispatch_due_reminders_links_calendar_event(database: Database) -
             message='Upcoming: "Board meeting"',
         )
 
-    dispatched = await dispatch_due_reminders(database)
+    dispatched = await dispatch_due_reminders(
+        database, settings, http_client=http_client
+    )
     assert dispatched == 1
 
     async with database.session() as session:

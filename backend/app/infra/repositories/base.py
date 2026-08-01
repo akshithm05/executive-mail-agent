@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from typing import Any, Generic, TypeVar
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import utcnow
 from app.infra.db.base import Base
 
 ModelT = TypeVar("ModelT", bound=Base)
@@ -160,6 +160,6 @@ class SoftDeleteRepository(SQLAlchemyRepository[ModelT]):
         entity = await SQLAlchemyRepository.get(self, entity_id)
         if entity is None or entity.deleted_at is not None:  # type: ignore[attr-defined]
             return False
-        entity.deleted_at = datetime.now(UTC)  # type: ignore[attr-defined]
+        entity.deleted_at = utcnow()  # type: ignore[attr-defined]
         await self._session.flush()
         return True

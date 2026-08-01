@@ -56,6 +56,7 @@ from app.agents.state import EmailTriageState
 from app.agents.tools import fetch_existing_task_context
 from app.config.logging import get_logger
 from app.config.settings import AISettings
+from app.core.time import as_naive_utc
 from app.infra.google.html_text import html_to_text
 from app.infra.models.ai_history import AIHistory
 from app.infra.models.calendar_event import CalendarEvent
@@ -68,6 +69,7 @@ from app.infra.repositories.draft_reply import DraftReplyRepository
 from app.infra.repositories.notification import NotificationRepository
 from app.infra.repositories.task import TaskRepository
 from app.services.memory import MemoryService
+from app.services.notification_dispatch import NotificationDispatchService
 from app.services.reminder import ReminderService
 
 _HIGH_PRIORITY_THRESHOLD = 0.7
@@ -103,6 +105,7 @@ class GraphDependencies:
     memory_retrieval: MemoryRetrievalService
     embedding_provider: EmbeddingProvider
     reminder_service: ReminderService
+    notification_dispatch: NotificationDispatchService
 
 
 async def _call_llm(
@@ -456,7 +459,9 @@ def build_graph(deps: GraphDependencies) -> Any:
                     title=extracted["title"],
                     description=extracted.get("description", ""),
                     priority=extracted.get("priority", "medium"),
-                    due_at=datetime.fromisoformat(due_raw) if due_raw else None,
+                    due_at=as_naive_utc(datetime.fromisoformat(due_raw))
+                    if due_raw
+                    else None,
                     created_by="ai",
                 )
             )
@@ -489,7 +494,7 @@ def build_graph(deps: GraphDependencies) -> Any:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 task_id=task.id,
-                remind_at=remind_at,
+                remind_at=as_naive_utc(remind_at),
                 message=f'Task due soon: "{task.title}"',
             )
 
@@ -510,8 +515,8 @@ def build_graph(deps: GraphDependencies) -> Any:
                     email_id=email_id,
                     title=state.get("event_title", ""),
                     location=state.get("event_location", ""),
-                    start_at=start_at,
-                    end_at=end_at,
+                    start_at=as_naive_utc(start_at),
+                    end_at=as_naive_utc(end_at),
                     status="tentative",
                 )
             )
@@ -524,7 +529,7 @@ def build_graph(deps: GraphDependencies) -> Any:
                 tenant_id=tenant_id,
                 user_id=user_id,
                 calendar_event_id=event.id,
-                remind_at=event_remind_at,
+                remind_at=as_naive_utc(event_remind_at),
                 message=f'Upcoming: "{event.title}"',
             )
 
@@ -626,6 +631,7 @@ def build_graph(deps: GraphDependencies) -> Any:
                     related_entity_id=uuid.UUID(state["created_draft_reply_id"]),
                 )
             )
+            await deps.notification_dispatch.dispatch(note)
             notification_ids.append(str(note.id))
         elif (state.get("priority_score") or 0.0) >= _HIGH_PRIORITY_THRESHOLD:
             note = await deps.notification_repo.add(
@@ -639,6 +645,7 @@ def build_graph(deps: GraphDependencies) -> Any:
                     related_entity_id=uuid.UUID(state["email_id"]),
                 )
             )
+            await deps.notification_dispatch.dispatch(note)
             notification_ids.append(str(note.id))
 
         return {"created_notification_ids": notification_ids}
