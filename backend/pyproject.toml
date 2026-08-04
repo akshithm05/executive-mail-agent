@@ -1,7 +1,7 @@
 [project]
 name = "aeea-backend"
 version = "0.1.0"
-description = "AI Executive Email Assistant — backend foundation (Phase 1)."
+description = "AI Executive Email Assistant — backend: FastAPI, LangGraph/Claude email-triage agent, Postgres, Redis."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }

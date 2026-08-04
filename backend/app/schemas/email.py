@@ -54,10 +54,25 @@ class EmailRead(BaseModel):
     received_at: datetime
     is_read: bool
     is_starred: bool
-    category: str | None
-    priority_score: float | None
+    category: str | None = Field(
+        default=None,
+        description=(
+            "AI-assigned category: one of `action_required`, `meeting_request`, "
+            "`fyi`, `newsletter`, `personal`, `spam`, `other`. `null` until "
+            "triage completes."
+        ),
+    )
+    priority_score: float | None = Field(
+        default=None,
+        description=(
+            "AI-assigned urgency, 0 (no urgency) to 1 (extremely urgent). "
+            "`null` until triage completes."
+        ),
+    )
     has_deadline: bool
-    deadline_at: datetime | None
+    deadline_at: datetime | None = Field(
+        default=None, description="AI-extracted deadline, if `has_deadline` is true."
+    )
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
@@ -80,7 +95,22 @@ class EmailSummaryRead(BaseModel):
     received_at: datetime
     is_read: bool
     is_starred: bool
-    category: str | None
-    priority_score: float | None
+    category: str | None = Field(
+        default=None,
+        description=(
+            "AI-assigned category: one of `action_required`, `meeting_request`, "
+            "`fyi`, `newsletter`, `personal`, `spam`, `other`. `null` until "
+            "triage completes."
+        ),
+    )
+    priority_score: float | None = Field(
+        default=None,
+        description=(
+            "AI-assigned urgency, 0 (no urgency) to 1 (extremely urgent). "
+            "`null` until triage completes."
+        ),
+    )
     has_deadline: bool
-    deadline_at: datetime | None
+    deadline_at: datetime | None = Field(
+        default=None, description="AI-extracted deadline, if `has_deadline` is true."
+    )

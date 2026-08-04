@@ -33,11 +33,15 @@ from app.infra.cache import build_redis_client
 from app.infra.db.session import Database
 from app.infra.events import EventBus
 from app.infra.google.rate_limiter import TokenBucketRateLimiter
-from app.infra.leader_lock import try_acquire_scheduler_leadership
+from app.infra.leader_lock import (
+    release_scheduler_leadership,
+    try_acquire_scheduler_leadership,
+)
 from app.infra.metrics import AI_TRIAGE_TOTAL
 from app.infra.queue import AIProcessingJob, AIProcessingQueue
 from app.infra.repositories.failed_job import FailedJobRepository
 from app.observability import init_sentry, init_tracing, instrument_database
+from app.openapi_metadata import API_DESCRIPTION, OPENAPI_TAGS
 from app.scheduler import build_scheduler
 from app.services.retry_queue import RetryQueueService
 from app.workers.ai_processing_worker import AIProcessingWorker
@@ -154,6 +158,10 @@ def _build_lifespan(
         finally:
             if is_scheduler_leader:
                 scheduler.shutdown(wait=False)
+                # Release the lock so a restarted replacement instance
+                # doesn't lose the acquisition race against this process's
+                # own now-dead lock -- see leader_lock.py's module docstring.
+                await release_scheduler_leadership(redis_client)
             await ai_worker.stop()
             await google_http_client.aclose()
             await redis_client.aclose()
@@ -180,6 +188,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=__version__,
+        description=API_DESCRIPTION,
+        openapi_tags=OPENAPI_TAGS,
         debug=settings.debug,
         lifespan=_build_lifespan(settings),
         openapi_url=f"{settings.api_v1_prefix}/openapi.json",

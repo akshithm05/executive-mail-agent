@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infra.db.base import Base
@@ -45,7 +45,10 @@ class Attachment(
     email_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("emails.id", ondelete="CASCADE"), nullable=False
     )
-    gmail_attachment_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Text, not a bounded VARCHAR: Gmail's real attachment ids are opaque,
+    # server-generated tokens that can run well past 255 characters --
+    # unlike the short fake ids used in tests, which never exposed this.
+    gmail_attachment_id: Mapped[str] = mapped_column(Text, nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(255), nullable=False)
     size_bytes: Mapped[int] = mapped_column(nullable=False, default=0)

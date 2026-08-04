@@ -33,8 +33,26 @@ class FakeRedis:
         entry = self._store.get(key)
         return entry[0] if entry is not None else None
 
-    async def set(self, key: str, value: str, *, ex: int | None = None) -> bool:
-        """Set ``key`` to ``value``, expiring after ``ex`` seconds if given."""
+    async def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int | float | None = None,
+        nx: bool = False,
+        xx: bool = False,
+    ) -> bool:
+        """Set ``key`` to ``value``, expiring after ``ex`` seconds if given.
+
+        ``nx``/``xx`` mirror ``redis.asyncio.Redis.set``'s real semantics
+        (only set if the key is absent / already present, respectively) --
+        ``app/infra/leader_lock.py``'s ``SET ... NX`` acquisition depends on
+        this actually being enforced, not a no-op flag.
+        """
+        self._expire_if_due(key)
+        exists = key in self._store
+        if (nx and exists) or (xx and not exists):
+            return False
         expires_at = time.monotonic() + ex if ex is not None else None
         self._store[key] = (str(value), expires_at)
         return True

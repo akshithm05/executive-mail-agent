@@ -16,6 +16,15 @@ import type {
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
+// Must match app/config/settings.py's CSRFSettings defaults on the backend
+// (CSRF_COOKIE_NAME / CSRF_HEADER_NAME) -- the double-submit-cookie pattern:
+// the backend hands back a JS-readable cookie at login, and every mutating
+// request must echo it back as this header or the backend's CSRF middleware
+// rejects it with 403 csrf_check_failed.
+const _CSRF_COOKIE_NAME = "aeea_csrf_token";
+const _CSRF_HEADER_NAME = "X-CSRF-Token";
+const _SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
 /** The backend's RFC 9457 problem+json error shape. */
 interface ProblemDetail {
   title: string;
@@ -38,13 +47,25 @@ export class ApiError extends Error {
   }
 }
 
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie
+    .split("; ")
+    .find((entry) => entry.startsWith(`${name}=`));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const csrfToken = _SAFE_METHODS.has(method) ? null : readCookie(_CSRF_COOKIE_NAME);
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     credentials: "include",
     headers: {
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(csrfToken ? { [_CSRF_HEADER_NAME]: csrfToken } : {}),
       ...init?.headers,
     },
   });

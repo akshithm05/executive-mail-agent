@@ -1,0 +1,4 @@
+# Load-testing dependencies. Kept separate from requirements-dev.txt --
+# Locust pulls in gevent/Flask/zmq, none of which the unit/integration
+# suite or the app itself needs, and this file is never installed in CI.
+locust==2.32.4

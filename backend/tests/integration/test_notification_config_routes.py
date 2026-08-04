@@ -6,17 +6,26 @@ Covers channels, custom rules, quiet hours, and push-device registration.
 from __future__ import annotations
 
 from datetime import time
+from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
+from app.config.settings import SessionSettings, Settings
 from app.infra.db.session import Database
+from app.infra.google.rate_limiter import TokenBucketRateLimiter
 from app.infra.repositories.notification_channel_config import (
     NotificationChannelConfigRepository,
 )
 from app.infra.repositories.push_device import PushDeviceRepository
 from app.infra.repositories.user import UserRepository
-from httpx import AsyncClient
+from app.main import create_app
+from httpx import ASGITransport, AsyncClient
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from tests.fake_google.app import USER_EMAIL
+from tests.fake_anthropic.app import create_fake_anthropic_app
+from tests.fake_google.app import USER_EMAIL, VALID_AUTH_CODE, create_fake_google_app
+from tests.fake_redis import FakeRedis
 
 
 @pytest.mark.asyncio
@@ -240,3 +249,118 @@ async def test_register_push_device_rejects_missing_required_field(
         "/api/v1/push-devices", json={"platform": "ios", "config": {}}
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_channel_test_endpoint_rejects_unknown_channel_type(
+    logged_in_client: AsyncClient,
+) -> None:
+    response = await logged_in_client.post(
+        "/api/v1/notification-channels/carrier-pigeon/test"
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_channel_test_endpoint_returns_404_when_not_configured(
+    logged_in_client: AsyncClient,
+) -> None:
+    response = await logged_in_client.post("/api/v1/notification-channels/slack/test")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_channel_test_endpoint_reports_delivery_failure_gracefully(
+    logged_in_client: AsyncClient,
+) -> None:
+    """A failed test-send reports ``ok: false``, not an HTTP error.
+
+    A webhook URL that 404s on the receiving end is a graceful
+    ``ok: false``, not a 5xx -- this is a connectivity *check*, distinct
+    from a real send (which enqueues a retry on failure; the test endpoint
+    never does).
+    """
+    await logged_in_client.put(
+        "/api/v1/notification-channels/webhook",
+        json={
+            "config": {
+                "url": "http://receiver.test/this-path-does-not-exist-on-the-receiver"
+            }
+        },
+    )
+    response = await logged_in_client.post("/api/v1/notification-channels/webhook/test")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["detail"] is not None
+
+
+@pytest.mark.asyncio
+async def test_channel_test_endpoint_succeeds_for_webhook(database: Database) -> None:
+    """Drives the full stack (login -> configure -> test-send) end-to-end.
+
+    Channel senders share the same ``google_http_client`` used for Google
+    API calls (see ``app/api/deps.py::get_channel_senders``), so the
+    receiver route is added directly onto the fake Google app rather than
+    swapped out for a separate client -- this lets the real OAuth login
+    flow and the webhook send share one transport, exactly as production
+    shares one ``httpx.AsyncClient``.
+    """
+    received: list[dict[str, Any]] = []
+
+    async def _receive_webhook(request: Request) -> JSONResponse:
+        received.append(await request.json())
+        return JSONResponse({"received": True})
+
+    google_app = create_fake_google_app()
+    google_app.add_api_route("/webhook-receiver", _receive_webhook, methods=["POST"])
+
+    settings = Settings(
+        environment="test",
+        log_format="console",
+        log_level="WARNING",
+        session=SessionSettings(cookie_secure=False),
+    )
+    application = create_app(settings)
+    application.state.db = database
+    application.state.redis = FakeRedis()
+    application.state.gmail_rate_limiter = TokenBucketRateLimiter(
+        rate_per_second=1000.0, burst_capacity=1000
+    )
+
+    async with (
+        AsyncClient(transport=ASGITransport(app=google_app)) as google_http_client,
+        AsyncClient(
+            transport=ASGITransport(app=create_fake_anthropic_app())
+        ) as anthropic_http_client,
+    ):
+        application.state.google_http_client = google_http_client
+        application.state.anthropic_http_client = anthropic_http_client
+
+        transport = ASGITransport(app=application)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            login_response = await client.get(
+                "/api/v1/auth/google/login", follow_redirects=False
+            )
+            state = parse_qs(urlparse(login_response.headers["location"]).query)[
+                "state"
+            ][0]
+            callback_response = await client.get(
+                "/api/v1/auth/google/callback",
+                params={"code": VALID_AUTH_CODE, "state": state},
+            )
+            assert callback_response.status_code == 200
+            csrf_token = client.cookies.get(settings.csrf.cookie_name)
+            assert csrf_token is not None
+            client.headers[settings.csrf.header_name] = csrf_token
+
+            await client.put(
+                "/api/v1/notification-channels/webhook",
+                json={"config": {"url": "http://receiver.test/webhook-receiver"}},
+            )
+            response = await client.post("/api/v1/notification-channels/webhook/test")
+            assert response.status_code == 200
+            assert response.json() == {"ok": True, "detail": None}
+
+    assert len(received) == 1
+    assert received[0]["notification_type"] == "test"
